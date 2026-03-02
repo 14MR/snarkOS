@@ -153,6 +153,8 @@ pub struct InnerGateway<N: Network> {
     resolver: RwLock<Resolver<N>>,
     /// The collection of both candidate and connected peers.
     peer_pool: RwLock<HashMap<SocketAddr, Peer<N>>>,
+    /// The latest commit hash advertised by connected peers during handshake.
+    connected_peer_commit_hashes: RwLock<HashMap<SocketAddr, Option<[u8; 40]>>>,
     #[cfg(feature = "telemetry")]
     validator_telemetry: Telemetry<N>,
     /// The primary sender.
@@ -243,6 +245,7 @@ impl<N: Network> Gateway<N> {
             cache: Default::default(),
             resolver: Default::default(),
             peer_pool: RwLock::new(initial_peers),
+            connected_peer_commit_hashes: Default::default(),
             #[cfg(feature = "telemetry")]
             validator_telemetry: Default::default(),
             primary_sender: Default::default(),
@@ -908,27 +911,52 @@ impl<N: Network> Gateway<N> {
 
         // Collect the connected validator addresses and stake.
         let mut connected_validator_addresses = HashSet::with_capacity(connected_validators.len());
+        let mut same_commit_validator_addresses = HashSet::with_capacity(connected_validators.len());
         // Include our own address.
         connected_validator_addresses.insert(self.account.address());
+        same_commit_validator_addresses.insert(self.account.address());
+        // Retrieve our commit hash and those advertised by connected peers.
+        let our_commit_hash = get_repo_commit_hash();
+        let connected_peer_commit_hashes = self.connected_peer_commit_hashes.read();
         // Include and log the connected validators.
         for peer_ip in &connected_validators {
             let address = self.resolve_to_aleo_addr(*peer_ip).map_or("Unknown".to_string(), |a| {
                 connected_validator_addresses.insert(a);
+                if matches!(
+                    (our_commit_hash, connected_peer_commit_hashes.get(peer_ip).copied().flatten()),
+                    (Some(our_sha), Some(peer_sha)) if peer_sha == our_sha
+                ) {
+                    same_commit_validator_addresses.insert(a);
+                }
                 a.to_string()
             });
             debug!("{}", format!("  Connected to: {peer_ip} - {address}").dimmed());
         }
+        drop(connected_peer_commit_hashes);
+
+        // Cache the stake values for computing percentages.
+        let total_stake = committee.total_stake();
+        let total_stake_f64 = total_stake as f64;
+        let connected_stake: u64 =
+            connected_validator_addresses.iter().map(|address| committee.get_stake(*address)).sum();
+        let connected_stake_f64 = connected_stake as f64;
+        let same_commit_stake: u64 =
+            same_commit_validator_addresses.iter().map(|address| committee.get_stake(*address)).sum();
+        let same_commit_connected_stake_as_percentage =
+            if connected_stake == 0 { 0.0 } else { same_commit_stake as f64 / connected_stake_f64 * 100.0 };
+        let same_commit_total_stake_as_percentage =
+            if total_stake == 0 { 0.0 } else { same_commit_stake as f64 / total_stake_f64 * 100.0 };
+        info!(
+            "Stake on same commit hash as us: {same_commit_connected_stake_as_percentage:.2}% of connected stake ({same_commit_total_stake_as_percentage:.2}% of total stake)"
+        );
+        #[cfg(feature = "metrics")]
+        metrics::gauge(metrics::bft::CONNECTED_STAKE_ON_SAME_COMMIT, same_commit_connected_stake_as_percentage);
 
         // Log the validators that are not connected.
         let num_not_connected = validators_total.saturating_sub(connected_validators.len());
         if num_not_connected > 0 && self.tcp().uptime() > Self::MISSING_VALIDATOR_CONNECTIONS_GRACE_PERIOD {
-            // Cache the total stake for computing percentages.
-            let total_stake = committee.total_stake();
-            let total_stake_f64 = total_stake as f64;
-
             // Collect the committee members.
-            let committee_members: HashSet<_> =
-                self.ledger.current_committee().map(|c| c.members().keys().copied().collect()).unwrap_or_default();
+            let committee_members: HashSet<_> = committee.members().keys().copied().collect();
 
             let not_connected_stake: u64 = committee_members
                 .difference(&connected_validator_addresses)
@@ -1322,6 +1350,7 @@ impl<N: Network> Disconnect for Gateway<N> {
     async fn handle_disconnect(&self, peer_addr: SocketAddr) {
         if let Some(peer_ip) = self.resolve_to_listener(&peer_addr) {
             self.downgrade_peer_to_candidate(peer_ip);
+            self.connected_peer_commit_hashes.write().remove(&peer_ip);
             // Remove the peer from the sync module. Except for some tests, there is always a sync sender.
             if let Some(sync_sender) = self.sync_sender.get() {
                 let tx_block_sync_remove_peer_ = sync_sender.tx_block_sync_remove_peer.clone();
@@ -1425,12 +1454,14 @@ impl<N: Network> Handshake for Gateway<N> {
                             cr.version,
                             ConnectionMode::Gateway,
                         );
+                        self.connected_peer_commit_hashes.write().insert(addr, cr.snarkos_sha);
                     }
                     #[cfg(feature = "metrics")]
                     self.update_metrics();
                     info!("{CONTEXT} Connected to '{addr}'");
                 }
                 Err(error) => {
+                    self.connected_peer_commit_hashes.write().remove(&addr);
                     if let Some(peer) = self.peer_pool.write().get_mut(&addr) {
                         // The peer may only be downgraded if it's a ConnectingPeer.
                         if peer.is_connecting() {
