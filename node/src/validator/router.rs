@@ -87,6 +87,7 @@ impl<N: Network, C: ConsensusStorage<N>> Disconnect for Validator<N, C> {
 
         if let Some(peer_ip) = self.router.resolve_to_listener(peer_addr) {
             self.router.downgrade_peer_to_candidate(peer_ip);
+            self.ping.on_peer_disconnected(peer_ip);
 
             // Validators do not sync from clients in the current design, so do not remove the peer from sync here.
 

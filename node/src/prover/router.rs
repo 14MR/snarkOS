@@ -90,6 +90,7 @@ impl<N: Network, C: ConsensusStorage<N>> Disconnect for Prover<N, C> {
 
         if let Some(peer_ip) = self.router.resolve_to_listener(peer_addr) {
             let was_fully_connected = self.router.downgrade_peer_to_candidate(peer_ip);
+            self.ping.on_peer_disconnected(peer_ip);
             // Only remove the peer from sync if the handshake was successful.
             if was_fully_connected {
                 self.sync.remove_peer(&peer_ip);
