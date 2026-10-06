@@ -22,21 +22,23 @@ use locktick::parking_lot::Mutex;
 #[cfg(not(feature = "locktick"))]
 use parking_lot::Mutex;
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeSet, HashMap},
     net::SocketAddr,
     sync::Arc,
     time::{Duration, Instant},
 };
 use tokio::{sync::Notify, time::timeout};
 
-/// Peers awaiting Pong are in `pending_pings`; peers ready for another Ping are in `next_ping`.
-///
-/// TODO (kaimast): maybe keep track of the last ping too, to not trigger spam detection?
+/// Peers awaiting Pong are in `pending_pings`; peers scheduled for another Ping are in `next_ping`.
 struct PingInner<N: Network> {
-    /// The next time we should ping a peer.
-    next_ping: BTreeMap<Instant, SocketAddr>,
+    /// Scheduled pings, ordered by deadline and peer to preserve equal deadlines.
+    next_ping: BTreeSet<(Instant, SocketAddr)>,
+    /// The last successful Ping enqueue time for each connected peer.
+    last_ping: HashMap<SocketAddr, Instant>,
     /// Outstanding pings, with a flag for locators updated since each ping was sent.
     pending_pings: HashMap<SocketAddr, bool>,
+    /// Whether a locator update needs to reschedule peers that are not awaiting Pong.
+    new_block: bool,
     /// The most recent block locators.
     /// (or None if this node does not offer block sync)
     block_locators: Option<BlockLocators<N>>,
@@ -51,18 +53,27 @@ pub struct Ping<N: Network> {
 
 impl<N: Network> PingInner<N> {
     fn new(block_locators: Option<BlockLocators<N>>) -> Self {
-        Self { block_locators, next_ping: Default::default(), pending_pings: Default::default() }
+        Self {
+            block_locators,
+            next_ping: Default::default(),
+            last_ping: Default::default(),
+            pending_pings: Default::default(),
+            new_block: false,
+        }
     }
 
     fn remove_peer(&mut self, peer_ip: SocketAddr) {
         self.pending_pings.remove(&peer_ip);
-        self.next_ping.retain(|_, ip| *ip != peer_ip);
+        self.last_ping.remove(&peer_ip);
+        self.next_ping.retain(|(_, ip)| *ip != peer_ip);
     }
 }
 
 impl<N: Network> Ping<N> {
-    /// The duration in seconds to wait between sending ping requests to a peer.
+    /// Interval between Pings when no block-locator update is pending.
     const MAX_PING_INTERVAL: Duration = Duration::from_secs(20);
+    /// Minimum spacing between Pings to the same connected peer.
+    const MIN_PING_INTERVAL: Duration = Duration::from_millis(100);
 
     /// Create a new instance of the ping logic.
     /// There should only be one per node.
@@ -115,20 +126,19 @@ impl<N: Network> Ping<N> {
             return;
         };
         if locators_changed {
-            Self::send_ping(&mut inner, &self.router, peer_ip);
-            return;
+            Self::send_or_schedule_ping(&mut inner, &self.router, peer_ip);
+        } else {
+            inner.next_ping.insert((now + Self::MAX_PING_INTERVAL, peer_ip));
         }
-
-        inner.next_ping.insert(now + Self::MAX_PING_INTERVAL, peer_ip);
-
-        // self.notify.notify() is not needed as ping_task wakes up every MAX_PING_INTERVAL
+        drop(inner);
+        self.notify.notify_one();
     }
 
     /// Notify the ping logic that a new peer connected.
     pub fn on_peer_connected(&self, peer_ip: SocketAddr) {
         let mut inner = self.inner.lock();
         inner.remove_peer(peer_ip);
-        if !Self::send_ping(&mut inner, &self.router, peer_ip) {
+        if !Self::send_or_schedule_ping(&mut inner, &self.router, peer_ip) {
             warn!("Peer {peer_ip} connected and immediately disconnected?");
         }
     }
@@ -144,6 +154,7 @@ impl<N: Network> Ping<N> {
             let mut inner = self.inner.lock();
             inner.block_locators = Some(locators);
             inner.pending_pings.values_mut().for_each(|changed| *changed = true);
+            inner.new_block = true;
         }
 
         // wake up the ping task
@@ -152,8 +163,6 @@ impl<N: Network> Ping<N> {
 
     /// Background task that periodically sends out new ping messages.
     async fn ping_task(inner: &Mutex<PingInner<N>>, router: &Router<N>, notify: &Notify) {
-        let mut new_block = false;
-
         loop {
             if router.ledger().is_stopped() {
                 break;
@@ -165,15 +174,15 @@ impl<N: Network> Ping<N> {
                 let now = Instant::now();
 
                 // Ping peers.
-                if new_block {
+                if inner.new_block {
                     Self::ping_all_peers(&mut inner, router);
-                    new_block = false;
+                    inner.new_block = false;
                 } else {
                     Self::ping_expired_peers(now, &mut inner, router);
                 }
 
                 // Figure out how long to sleep.
-                if let Some((time, _)) = inner.next_ping.first_key_value() {
+                if let Some((time, _)) = inner.next_ping.first() {
                     time.saturating_duration_since(now)
                 } else {
                     Self::MAX_PING_INTERVAL
@@ -181,16 +190,22 @@ impl<N: Network> Ping<N> {
             };
 
             // wait to be woke up, either by timer or notify
-            if timeout(sleep_time, notify.notified()).await.is_ok() {
-                // If the timer is not expired, it means we got woken up by a new block.
-                new_block = true;
-            }
+            let _ = timeout(sleep_time, notify.notified()).await;
         }
     }
 
-    fn send_ping(inner: &mut PingInner<N>, router: &Router<N>, peer_ip: SocketAddr) -> bool {
+    fn send_or_schedule_ping(inner: &mut PingInner<N>, router: &Router<N>, peer_ip: SocketAddr) -> bool {
+        if let Some(last_ping) = inner.last_ping.get(&peer_ip) {
+            let earliest = *last_ping + Self::MIN_PING_INTERVAL;
+            if Instant::now() < earliest {
+                inner.next_ping.insert((earliest, peer_ip));
+                return true;
+            }
+        }
+
         let success = router.send_ping(peer_ip, inner.block_locators.clone());
         if success {
+            inner.last_ping.insert(peer_ip, Instant::now());
             inner.pending_pings.insert(peer_ip, false);
         }
         success
@@ -201,7 +216,7 @@ impl<N: Network> Ping<N> {
         loop {
             // Find next peer to contact.
             let peer_ip = {
-                let Some((time, peer_ip)) = inner.next_ping.first_key_value() else {
+                let Some((time, peer_ip)) = inner.next_ping.first() else {
                     return;
                 };
 
@@ -213,8 +228,8 @@ impl<N: Network> Ping<N> {
             };
 
             // Send new ping
-            let success = Self::send_ping(inner, router, peer_ip);
             inner.next_ping.pop_first();
+            let success = Self::send_or_schedule_ping(inner, router, peer_ip);
 
             if !success {
                 trace!("Failed to send ping to peer {peer_ip}. Disconnected.");
@@ -224,11 +239,11 @@ impl<N: Network> Ping<N> {
 
     /// Ping all known peers.
     fn ping_all_peers(inner: &mut PingInner<N>, router: &Router<N>) {
-        let peers: Vec<SocketAddr> = inner.next_ping.values().copied().collect();
+        let peers: Vec<SocketAddr> = inner.next_ping.iter().map(|(_, peer_ip)| *peer_ip).collect();
         inner.next_ping.clear();
 
         for peer_ip in peers {
-            let success = Self::send_ping(inner, router, peer_ip);
+            let success = Self::send_or_schedule_ping(inner, router, peer_ip);
 
             if !success {
                 trace!("Failed to send ping to peer {peer_ip}. Disconnected.");
