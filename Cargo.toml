@@ -47,8 +47,8 @@ default-features = false
 
 [workspace.dependencies.snarkvm]
 #path = "../snarkVM"
-git = "https://github.com/ProvableHQ/snarkVM.git"
-rev = "638c8145d0ae9d4e842d999fdfdcdd0f16b73bc2" #staging + mainnet_4_10_0
+git = "https://github.com/14MR/snarkVM.git"
+rev = "8fab9b7a83ee05ea8ec79468fa4901fbfed07ebf"
 #version = "=4.10.0"
 default-features = false
 
@@ -281,7 +281,8 @@ name = "snarkos"
 path = "snarkos/main.rs"
 
 [features]
-default = [ "snarkos-cli/metrics", "snarkos-node-metrics", "snarkos-node/metrics", "snarkos-node-cdn/metrics" ]
+reuse-finalize = [ "snarkvm/reuse-finalize" ]
+default = [ "reuse-finalize", "snarkos-cli/metrics", "snarkos-node-metrics", "snarkos-node/metrics", "snarkos-node-cdn/metrics" ]
 history-staking-rewards = [ "snarkos-node/history-staking-rewards" ]
 # Deprecated alias for the metrics feature, which now carries the validator telemetry.
 # Retained so that build commands naming this feature keep resolving.

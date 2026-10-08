@@ -590,9 +590,15 @@ cargo run --release -- clean --dev <NODE_ID>
 
 ## 6.4 Feature Flags
 
+By default, **reuse-finalize** retains the latest locally validated finalize result.
+Block insertion commits its storage writes when the parent state and finalize inputs still match.
+A mismatch uses the full finalize path. Block validation still runs all checks.
+
 By default, the metrics feature is turned on for some internal crates. It carries the validator
 telemetry described in [Validator Telemetry Metrics](#321-validator-telemetry-metrics).
 
+* **reuse-finalize** -
+  Reuses speculative finalize results during block insertion. Enabled by default.
 * **history** -
   Enables a /history REST endpoint.
 * **telemetry** -
