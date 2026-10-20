@@ -318,8 +318,13 @@ fn bench_mapping_lookups(c: &mut Criterion) {
 }
 
 /// Benchmarks `check_transaction_basic` (called from `transaction_broadcast`) for a deploy and an
-/// execute transaction, mirroring what snarkVM's own `ledger/benches/transaction.rs` measures for
-/// `vm.check_transaction` -- `Ledger::check_transaction_basic` just forwards to it.
+/// execute transaction, mirroring snarkVM's `cached_verify` benches in `ledger/benches/transaction.rs`
+/// -- `Ledger::check_transaction_basic` forwards to `vm.check_transaction`.
+///
+/// `vm.check_transaction` caches each transaction it accepts and skips proof verification on a
+/// repeat, so after the first iteration these benches time a cache hit, not verification. The
+/// ledger is also at genesis height, which verifies with Varuna V1. snarkVM's
+/// `ledger/benches/verify_transaction.rs` times verification itself.
 ///
 /// Each transaction is built fresh, checked, but never applied to its ledger. Both pay with a
 /// public fee, not a fee record -- see the comment on the equivalent deploy in
@@ -344,7 +349,7 @@ function hello:
         .unwrap();
         let deploy_tx = ledger.vm().deploy(&private_key, &program, None, 600_000, None, rng).unwrap();
 
-        group.bench_function("check_transaction_basic(deploy)", |b| {
+        group.bench_function("check_transaction_basic(deploy) - cached_verify", |b| {
             b.iter(|| ledger.check_transaction_basic(&deploy_tx, None, rng).unwrap())
         });
     }
@@ -369,7 +374,7 @@ function hello:
             .execute_authorization(execute_authorization.replicate(), Some(fee_authorization.replicate()), None, rng)
             .unwrap();
 
-        group.bench_function("check_transaction_basic(execute transfer_public)", |b| {
+        group.bench_function("check_transaction_basic(execute transfer_public) - cached_verify", |b| {
             b.iter(|| ledger.check_transaction_basic(&execute_tx, None, rng).unwrap())
         });
     }
