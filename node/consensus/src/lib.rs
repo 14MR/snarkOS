@@ -142,6 +142,7 @@ impl<N: Network> Consensus<N> {
         node_data_dir: NodeDataDir,
         ping: Arc<Ping<N>>,
         dev: Option<u16>,
+        proposal_spent_limit_multiplier: u64,
     ) -> Result<Self> {
         // Initialize the primary channels.
         let (primary_sender, primary_receiver) = init_primary_channels::<N>();
@@ -161,6 +162,7 @@ impl<N: Network> Consensus<N> {
             trusted_peers_only,
             node_data_dir,
             dev,
+            proposal_spent_limit_multiplier,
         )?;
         // Initialize the consensus channels.
         let (consensus_sender, consensus_receiver) = init_consensus_channels();
