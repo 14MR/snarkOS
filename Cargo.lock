@@ -4938,7 +4938,6 @@ version = "4.12.0"
 dependencies = [
  "built",
  "clap",
- "elliptic-curve",
  "locktick",
  "rusty-hook",
  "snarkos-account",
