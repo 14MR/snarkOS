@@ -106,7 +106,7 @@ version = "0.3"
 version = "0.6"
 
 [workspace.dependencies.lru]
-version = "0.18.2"
+version = "0.19.0"
 
 [workspace.dependencies.num_cpus]
 version = "1"
