@@ -2963,9 +2963,18 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "lru"
-version = "0.18.2"
+version = "0.18.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d2f2f9b4ba7e6b24d95e7e899329d35be83bcded72c8540cdd5368932d1d90a"
+checksum = "ef9ac18847474e638e3702b76c65d4eb93428471a74778ef0f1be711717f89b5"
+dependencies = [
+ "hashbrown 0.17.1",
+]
+
+[[package]]
+name = "lru"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a9f71e3591c7ec44d3e563e87bf14ddc2bada8519dca046e5b0e560cd004e2d"
 dependencies = [
  "hashbrown 0.17.1",
 ]
@@ -4072,7 +4081,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "itertools 0.14.0",
  "kasuari",
- "lru",
+ "lru 0.18.5",
  "palette",
  "serde",
  "strum",
@@ -5038,7 +5047,7 @@ dependencies = [
  "http 1.5.0",
  "indexmap 2.14.2",
  "locktick",
- "lru",
+ "lru 0.19.0",
  "num_cpus",
  "parking_lot",
  "paste",
@@ -5084,7 +5093,7 @@ dependencies = [
  "indexmap 2.14.2",
  "itertools 0.15.0",
  "locktick",
- "lru",
+ "lru 0.19.0",
  "mockall",
  "open",
  "parking_lot",
@@ -5171,7 +5180,7 @@ dependencies = [
  "bytes",
  "indexmap 2.14.2",
  "locktick",
- "lru",
+ "lru 0.19.0",
  "parking_lot",
  "snarkvm",
  "tracing",
@@ -5208,7 +5217,7 @@ dependencies = [
  "indexmap 2.14.2",
  "itertools 0.15.0",
  "locktick",
- "lru",
+ "lru 0.19.0",
  "once_cell",
  "parking_lot",
  "snarkos-account",
@@ -5277,7 +5286,7 @@ dependencies = [
  "indexmap 2.14.2",
  "jsonwebtoken",
  "locktick",
- "lru",
+ "lru 0.19.0",
  "once_cell",
  "parking_lot",
  "rand 0.10.3",
@@ -5919,7 +5928,7 @@ dependencies = [
  "cfg-if",
  "indexmap 2.14.2",
  "locktick",
- "lru",
+ "lru 0.18.5",
  "parking_lot",
  "rand 0.10.3",
  "rand_chacha 0.10.0",
@@ -6093,7 +6102,7 @@ dependencies = [
  "bincode",
  "indexmap 2.14.2",
  "locktick",
- "lru",
+ "lru 0.18.5",
  "parking_lot",
  "rand 0.10.3",
  "rand_chacha 0.10.0",
@@ -6114,7 +6123,7 @@ dependencies = [
  "colored 3.1.1",
  "indexmap 2.14.2",
  "locktick",
- "lru",
+ "lru 0.18.5",
  "parking_lot",
  "rand 0.10.3",
  "rand_chacha 0.10.0",
@@ -6232,7 +6241,7 @@ dependencies = [
  "indexmap 2.14.2",
  "itertools 0.14.0",
  "locktick",
- "lru",
+ "lru 0.18.5",
  "parking_lot",
  "rand 0.10.3",
  "rayon",
