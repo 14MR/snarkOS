@@ -87,20 +87,20 @@ impl<N: Network> ProposalTask<N> {
     /// The three stages are implemented as separate methods; see their doc-comments for details.
     pub(super) async fn run<P: BatchPropose + 'static>(self, primary: P) {
         let mut ready_rx = self.inner.ready.subscribe();
+        let mut proposal_deadline = Instant::now() + MIN_BATCH_DELAY;
 
         loop {
             let round = primary.current_round();
-            // TODO(kaimast): the round_start time should be based on the timestamp of the
-            // previous batch, not the current wall-clock time.
             let round_start = Instant::now();
 
-            if !Self::wait_until_proposal_ready(&primary, &mut ready_rx, round, round_start).await {
+            if !Self::wait_until_proposal_ready(&primary, &mut ready_rx, round, round_start, proposal_deadline).await {
                 continue; // round changed; restart
             }
 
             if !Self::propose(&primary, round).await {
                 continue; // round changed; restart
             }
+            proposal_deadline = Instant::now() + MIN_BATCH_DELAY;
 
             // Reset readiness so the next round waits for an explicit signal.
             self.inner.ready.send_replace(false);
@@ -111,8 +111,7 @@ impl<N: Network> ProposalTask<N> {
 
     /// Stage 1: Wait until conditions are met to propose a batch.
     ///
-    /// Blocks until MIN_BATCH_DELAY has elapsed since `round_start`, and either `signal()` fires
-    /// (leader cert arrived) or MAX_BATCH_DELAY expires without one.
+    /// Waits for the minimum proposal interval and a readiness signal or the round timeout.
     ///
     /// Returns `true` if ready to propose, `false` if the round changed (caller should restart).
     async fn wait_until_proposal_ready<P: BatchPropose>(
@@ -120,6 +119,7 @@ impl<N: Network> ProposalTask<N> {
         ready_rx: &mut watch::Receiver<bool>,
         round: u64,
         round_start: Instant,
+        proposal_deadline: Instant,
     ) -> bool {
         loop {
             if primary.current_round() != round {
@@ -128,7 +128,7 @@ impl<N: Network> ProposalTask<N> {
 
             // Enforce the minimum inter-proposal delay.
             // This is a no-op once the deadline has already passed.
-            sleep_until(round_start + MIN_BATCH_DELAY).await;
+            sleep_until(proposal_deadline).await;
 
             // Wait for a readiness signal, the MAX_BATCH_DELAY deadline, or a short heartbeat
             // that lets the round-change check at the top of the loop fire regularly.
@@ -326,6 +326,64 @@ mod tests {
                 Ok(true)
             }
         }
+    }
+
+    struct TimedProposer {
+        round: Arc<AtomicU32>,
+        proposals: tokio::sync::mpsc::UnboundedSender<(u64, Instant)>,
+    }
+
+    #[async_trait::async_trait]
+    impl BatchPropose for TimedProposer {
+        fn current_round(&self) -> u64 {
+            u64::from(self.round.load(Ordering::SeqCst))
+        }
+
+        async fn propose_batch(&self) -> Result<bool> {
+            self.proposals.send((self.current_round(), Instant::now()))?;
+            Ok(true)
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_certification_time_counts_toward_proposal_interval() {
+        let task = ProposalTask::<MainnetV0>::default();
+        let round = Arc::new(AtomicU32::new(1));
+        let (proposals, mut received) = tokio::sync::mpsc::unbounded_channel();
+        let handle = tokio::spawn(task.clone().run(TimedProposer { round: round.clone(), proposals }));
+        let (_, first) = received.recv().await.unwrap();
+
+        sleep(Duration::from_millis(750)).await;
+        round.store(2, Ordering::SeqCst);
+        task.signal();
+        let (second_round, second) = received.recv().await.unwrap();
+
+        assert_eq!(second_round, 2);
+        assert!(second.duration_since(first) >= MIN_BATCH_DELAY);
+        assert!(second.duration_since(first) <= MIN_BATCH_DELAY + Duration::from_millis(1));
+        handle.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_round_changes_preserve_proposal_deadline() {
+        let task = ProposalTask::<MainnetV0>::default();
+        let round = Arc::new(AtomicU32::new(1));
+        let (proposals, mut received) = tokio::sync::mpsc::unbounded_channel();
+        let handle = tokio::spawn(task.clone().run(TimedProposer { round: round.clone(), proposals }));
+        let (_, first) = received.recv().await.unwrap();
+
+        sleep(Duration::from_millis(250)).await;
+        round.store(2, Ordering::SeqCst);
+        task.signal();
+        sleep(Duration::from_millis(250)).await;
+        round.store(3, Ordering::SeqCst);
+        task.signal();
+        let (second_round, second) = received.recv().await.unwrap();
+
+        assert_eq!(second_round, 3);
+        assert!(second.duration_since(first) >= MIN_BATCH_DELAY);
+        assert!(second.duration_since(first) <= MIN_BATCH_DELAY + Duration::from_millis(1));
+        handle.abort();
     }
 
     /// Signals the proposal task and verifies that `propose_batch` is called on the dummy.
