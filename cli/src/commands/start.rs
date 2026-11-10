@@ -40,7 +40,7 @@ use snarkvm::{
         committee::{Committee, MIN_DELEGATOR_STAKE, MIN_VALIDATOR_STAKE},
         store::{ConsensusStore, helpers::memory::ConsensusMemory},
     },
-    prelude::{FromBytes, Itertools, ToBits, ToBytes},
+    prelude::{FromBytes, Itertools, ProgramID, ToBits, ToBytes},
     synthesizer::VM,
     utilities::to_bytes_le,
 };
@@ -270,6 +270,11 @@ pub struct Start {
     #[clap(long, conflicts_with = "history_compat_mode")]
     pub history_json: bool,
 
+    /// Record per-key history for all mappings of the selected programs in the ledger database.
+    /// Accepts a comma-separated list. Only records blocks processed after startup.
+    #[clap(long, value_delimiter = ',', action = clap::ArgAction::Append, conflicts_with = "history_compat_mode")]
+    pub history_programs: Vec<String>,
+
     /// Specify the JWT secret for the REST server (16B, base64-encoded).
     #[clap(long, group = "jwt_flags")]
     pub jwt_secret: Option<String>,
@@ -389,6 +394,27 @@ pub struct Start {
 }
 
 impl Start {
+    /// Parses and deduplicates the programs selected for finalize history recording.
+    fn parse_history_programs<N: Network>(&self, node_type: NodeType) -> Result<Vec<ProgramID<N>>> {
+        if self.history_programs.is_empty() {
+            return Ok(Vec::new());
+        }
+        ensure!(
+            matches!(node_type, NodeType::Client | NodeType::Validator),
+            "`--history-programs` is only supported on a client or validator"
+        );
+
+        let mut programs = Vec::new();
+        for value in &self.history_programs {
+            let program = ProgramID::<N>::from_str(value)
+                .with_context(|| format!("Invalid program ID '{value}' in `--history-programs`"))?;
+            if !programs.contains(&program) {
+                programs.push(program);
+            }
+        }
+        Ok(programs)
+    }
+
     /// Starts the snarkOS node and blocks until it terminates.
     pub fn parse(self) -> Result<String> {
         // Prepare the shutdown flag.
@@ -979,6 +1005,7 @@ impl Start {
         if self.history_json {
             println!("Indexing credits.aleo history as JSON");
         }
+        let history_programs = self.parse_history_programs::<N>(node_type)?;
 
         // Determine the historical API to serve the `history` routes from, if in compatibility mode.
         let history_api_url = self.parse_history_api_url::<N>()?;
@@ -1002,9 +1029,9 @@ impl Start {
 
         // Initialize the node.
         let node = match node_type {
-            NodeType::Validator => Node::new_validator(node_ip, self.bft, rest_ip, self.rest_rps, rest_verification_limits, history_api_url.clone(), self.history_json, account, &trusted_peers, &trusted_validators, genesis, cdn, storage_mode, node_data_dir, self.trusted_peers_only, self.auto_db_checkpoints.clone(), dev_txs, self.dev, dev_hotswap_config, self.proposal_spent_limit_multiplier, signal_handler.clone()).await,
+            NodeType::Validator => Node::new_validator(node_ip, self.bft, rest_ip, self.rest_rps, rest_verification_limits, history_api_url.clone(), self.history_json, history_programs, account, &trusted_peers, &trusted_validators, genesis, cdn, storage_mode, node_data_dir, self.trusted_peers_only, self.auto_db_checkpoints.clone(), dev_txs, self.dev, dev_hotswap_config, self.proposal_spent_limit_multiplier, signal_handler.clone()).await,
             NodeType::Prover => Node::new_prover(node_ip, account, &trusted_peers, genesis, node_data_dir, self.trusted_peers_only, self.dev, signal_handler.clone()).await,
-            NodeType::Client => Node::new_client(node_ip, rest_ip, self.rest_rps, rest_verification_limits, history_api_url.clone(), self.history_json, account, &trusted_peers, genesis, cdn, storage_mode, node_data_dir, self.trusted_peers_only, self.auto_db_checkpoints.clone(), self.dev, signal_handler.clone()).await,
+            NodeType::Client => Node::new_client(node_ip, rest_ip, self.rest_rps, rest_verification_limits, history_api_url.clone(), self.history_json, history_programs, account, &trusted_peers, genesis, cdn, storage_mode, node_data_dir, self.trusted_peers_only, self.auto_db_checkpoints.clone(), self.dev, signal_handler.clone()).await,
             NodeType::BootstrapClient => Node::new_bootstrap_client(node_ip, account, *genesis.header(), genesis.hash(), self.dev).await,
         }?;
 
@@ -1641,6 +1668,40 @@ mod tests {
         assert!(
             Start::try_parse_from(["snarkos", "--client", "--history-json", "--history-compat-mode"].iter()).is_err()
         );
+    }
+
+    #[test]
+    fn history_programs_selection_and_validation() {
+        type N = snarkvm::prelude::MainnetV0;
+
+        let config = Start::try_parse_from([
+            "snarkos",
+            "--client",
+            "--history-programs",
+            "credits.aleo,shield_swap.aleo",
+            "--history-programs",
+            "credits.aleo",
+        ])
+        .unwrap();
+        let programs = config.parse_history_programs::<N>(NodeType::Client).unwrap();
+        assert_eq!(programs.len(), 2);
+        assert_eq!(programs[0].to_string(), "credits.aleo");
+        assert_eq!(programs[1].to_string(), "shield_swap.aleo");
+
+        let config = Start::try_parse_from(["snarkos", "--client", "--history-programs", "not a program"]).unwrap();
+        assert!(config.parse_history_programs::<N>(NodeType::Client).is_err());
+
+        let config = Start::try_parse_from(["snarkos", "--prover", "--history-programs", "shield_swap.aleo"]).unwrap();
+        assert!(config.parse_history_programs::<N>(NodeType::Prover).is_err());
+
+        let config = Start::try_parse_from([
+            "snarkos",
+            "--client",
+            "--history-programs",
+            "shield_swap.aleo",
+            "--history-compat-mode",
+        ]);
+        assert!(config.is_err());
     }
 
     #[test]

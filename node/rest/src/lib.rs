@@ -426,7 +426,7 @@ impl<N: Network, C: ConsensusStorage<N>, R: Routing<N>> Rest<N, C, R> {
         // Register the view-at-latest-height endpoint (always available, no history required).
         let routes = routes.route("/program/{id}/view/{function}", post(Self::evaluate_view_latest));
 
-        // JSON files written by `snarkos start --history-json`.
+        // The legacy credits JSON route and the per-key program history routes.
         let routes = routes.route("/block/{height}/history/{mapping}", get(Self::get_block_history));
 
         // In history compatibility mode, serve the routes of the removed `history` feature from the
@@ -439,6 +439,8 @@ impl<N: Network, C: ConsensusStorage<N>, R: Routing<N>> Rest<N, C, R> {
                 .route("/staking/rewards/{address}/{height}", get(Self::get_staking_reward_compat))
         } else {
             routes
+                .route("/program/{id}/mapping/{name}/{key}/history/{height}", get(Self::get_program_history))
+                .route("/program/{id}/mapping/{name}/history/{height}", get(Self::get_program_history_batch))
         };
 
         let trace_layer = TraceLayer::new_for_http()
@@ -1078,6 +1080,58 @@ mod route_tests {
         for query in ["", "?start=0", "?end=1", "?start=abc&end=1", "?start=0&end=-1"] {
             let (status, _) = get(&rest, &format!("/blocks/hashes{query}")).await;
             assert_eq!(status, StatusCode::BAD_REQUEST, "the query '{query}' was not rejected");
+        }
+    }
+
+    #[tokio::test]
+    async fn program_history_serves_past_values_and_distinguishes_missing_coverage() {
+        use snarkvm::{
+            prelude::{Identifier, Plaintext, ProgramID, Value},
+            synthesizer::program::FinalizeStoreTrait,
+        };
+        use std::str::FromStr;
+
+        let rest = sample_rest().await;
+        let program = ProgramID::<CurrentNetwork>::from_str("shield_swap.aleo").unwrap();
+        let mapping = Identifier::from_str("slots").unwrap();
+        let key = Plaintext::from_str("1field").unwrap();
+        let store = rest.ledger.vm().finalize_store();
+        store.set_history_programs(vec![program]);
+        store.initialize_mapping(program, mapping).unwrap();
+        store.update_key_value(program, mapping, key.clone(), Value::from_str("10u64").unwrap()).unwrap();
+        store.start_atomic();
+        store.record_program_history(0).unwrap();
+        store.finish_atomic().unwrap();
+        store.start_atomic();
+        store.update_key_value(program, mapping, key, Value::from_str("20u64").unwrap()).unwrap();
+        store.record_program_history(1).unwrap();
+        store.finish_atomic().unwrap();
+
+        let (status, body) = get(&rest, "/program/shield_swap.aleo/mapping/slots/1field/history/0").await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(serde_json::from_str::<String>(&body).unwrap(), "10u64");
+        let (status, body) = get(&rest, "/program/shield_swap.aleo/mapping/slots/1field/history/1").await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(serde_json::from_str::<String>(&body).unwrap(), "20u64");
+        let (status, body) = get(&rest, "/program/shield_swap.aleo/mapping/slots/2field/history/0").await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body, "null");
+        let (status, body) = get(&rest, "/program/shield_swap.aleo/mapping/slots/history/0?keys=1field,2field").await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!([
+                { "key": "1field", "value": "10u64" },
+                { "key": "2field", "value": null }
+            ])
+        );
+        for route in [
+            "/program/shield_swap.aleo/mapping/slots/1field/history/2",
+            "/program/shield_swap.aleo/mapping/positions/1field/history/0",
+            "/program/other.aleo/mapping/slots/1field/history/0",
+        ] {
+            let (status, body) = get(&rest, route).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{route}: {body}");
         }
     }
 
