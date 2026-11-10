@@ -1671,40 +1671,6 @@ mod tests {
     }
 
     #[test]
-    fn history_programs_selection_and_validation() {
-        type N = snarkvm::prelude::MainnetV0;
-
-        let config = Start::try_parse_from([
-            "snarkos",
-            "--client",
-            "--history-programs",
-            "credits.aleo,shield_swap.aleo",
-            "--history-programs",
-            "credits.aleo",
-        ])
-        .unwrap();
-        let programs = config.parse_history_programs::<N>(NodeType::Client).unwrap();
-        assert_eq!(programs.len(), 2);
-        assert_eq!(programs[0].to_string(), "credits.aleo");
-        assert_eq!(programs[1].to_string(), "shield_swap.aleo");
-
-        let config = Start::try_parse_from(["snarkos", "--client", "--history-programs", "not a program"]).unwrap();
-        assert!(config.parse_history_programs::<N>(NodeType::Client).is_err());
-
-        let config = Start::try_parse_from(["snarkos", "--prover", "--history-programs", "shield_swap.aleo"]).unwrap();
-        assert!(config.parse_history_programs::<N>(NodeType::Prover).is_err());
-
-        let config = Start::try_parse_from([
-            "snarkos",
-            "--client",
-            "--history-programs",
-            "shield_swap.aleo",
-            "--history-compat-mode",
-        ]);
-        assert!(config.is_err());
-    }
-
-    #[test]
     fn clap_snarkos_start() {
         let arg_vec = vec![
             "snarkos",

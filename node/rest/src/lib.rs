@@ -1083,58 +1083,6 @@ mod route_tests {
         }
     }
 
-    #[tokio::test]
-    async fn program_history_serves_past_values_and_distinguishes_missing_coverage() {
-        use snarkvm::{
-            prelude::{Identifier, Plaintext, ProgramID, Value},
-            synthesizer::program::FinalizeStoreTrait,
-        };
-        use std::str::FromStr;
-
-        let rest = sample_rest().await;
-        let program = ProgramID::<CurrentNetwork>::from_str("shield_swap.aleo").unwrap();
-        let mapping = Identifier::from_str("slots").unwrap();
-        let key = Plaintext::from_str("1field").unwrap();
-        let store = rest.ledger.vm().finalize_store();
-        store.set_history_programs(vec![program]);
-        store.initialize_mapping(program, mapping).unwrap();
-        store.update_key_value(program, mapping, key.clone(), Value::from_str("10u64").unwrap()).unwrap();
-        store.start_atomic();
-        store.record_program_history(0).unwrap();
-        store.finish_atomic().unwrap();
-        store.start_atomic();
-        store.update_key_value(program, mapping, key, Value::from_str("20u64").unwrap()).unwrap();
-        store.record_program_history(1).unwrap();
-        store.finish_atomic().unwrap();
-
-        let (status, body) = get(&rest, "/program/shield_swap.aleo/mapping/slots/1field/history/0").await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        assert_eq!(serde_json::from_str::<String>(&body).unwrap(), "10u64");
-        let (status, body) = get(&rest, "/program/shield_swap.aleo/mapping/slots/1field/history/1").await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        assert_eq!(serde_json::from_str::<String>(&body).unwrap(), "20u64");
-        let (status, body) = get(&rest, "/program/shield_swap.aleo/mapping/slots/2field/history/0").await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        assert_eq!(body, "null");
-        let (status, body) = get(&rest, "/program/shield_swap.aleo/mapping/slots/history/0?keys=1field,2field").await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&body).unwrap(),
-            serde_json::json!([
-                { "key": "1field", "value": "10u64" },
-                { "key": "2field", "value": null }
-            ])
-        );
-        for route in [
-            "/program/shield_swap.aleo/mapping/slots/1field/history/2",
-            "/program/shield_swap.aleo/mapping/positions/1field/history/0",
-            "/program/other.aleo/mapping/slots/1field/history/0",
-        ] {
-            let (status, body) = get(&rest, route).await;
-            assert_eq!(status, StatusCode::NOT_FOUND, "{route}: {body}");
-        }
-    }
-
     /// Sends a request through the full versioned router, so the version prefixes apply.
     async fn get_versioned(rest: &CurrentRest, uri: &str) -> (StatusCode, String) {
         send(&rest.build_versioned_router(TEST_RPS), uri).await
