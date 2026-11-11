@@ -90,6 +90,7 @@ impl<N: Network, C: ConsensusStorage<N>> Validator<N, C> {
         history_api_url: Option<String>,
         history_json: bool,
         history_programs: Vec<ProgramID<N>>,
+        archival: bool,
         account: Account<N>,
         trusted_peers: &[SocketAddr],
         trusted_validators: &[SocketAddr],
@@ -131,6 +132,7 @@ impl<N: Network, C: ConsensusStorage<N>> Validator<N, C> {
             ledger.vm().finalize_store().set_record_history_json(true);
         }
         ledger.vm().finalize_store().set_history_programs(history_programs);
+        ledger.vm().finalize_store().set_archival(archival);
 
         // If snarkVM picked the start round itself (no CLI flag and no persisted file),
         // record it now so subsequent restarts are stable.
@@ -628,6 +630,7 @@ mod tests {
             None,
             false,
             Vec::new(),
+            false,
             account,
             &[],
             &[],

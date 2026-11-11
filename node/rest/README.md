@@ -11,7 +11,7 @@ Responses smaller than 32 bytes are not compressed.
 
 The v1 API and the unversioned routes are deprecated. See [Migrating from the v1 REST API to v2](./MIGRATING_TO_V2.md).
 
-## Selected program history
+## Program mapping history
 
 Run a client or validator with `--history-programs=shield_swap.aleo` to record per-key history for that program after each committed block.
 Use a comma-separated list or repeat the flag to select more programs:
@@ -20,10 +20,17 @@ Use a comma-separated list or repeat the flag to select more programs:
 snarkos start --client --history-programs=shield_swap.aleo,shield_swap_router.aleo
 ```
 
-Dependencies must be selected explicitly. The flag works without `--history-json` and can be combined with it to also write the legacy credits snapshots.
-It cannot be combined with `--history-compat-mode`.
+Use `--archival` instead to record mapping history for all programs, including new deployments:
 
-Selected key versions and deletion markers are stored in the same ledger RocksDB database. Recording starts with a baseline at the first indexed block, then records changes per committed block. History is available only across contiguous indexed coverage. Gaps are unavailable. Existing history requires replay from genesis or an earlier valid checkpoint; enabling the flag does not backfill a synced ledger.
+```sh
+snarkos start --client --archival
+```
+
+With `--history-programs`, dependencies must be selected explicitly. `--archival` includes them automatically.
+These modes are mutually exclusive. Both work without `--history-json` and can be combined with it to also write the legacy credits snapshots.
+Neither can be combined with `--history-compat-mode`.
+
+Key versions and deletion markers are stored in the same ledger RocksDB database. Recording starts with a baseline at the first indexed block, then records changes per committed block. History is available only across contiguous indexed coverage. Gaps are unavailable. Existing history requires replay from genesis or an earlier valid checkpoint; enabling either mode does not backfill a synced ledger.
 
 Read history through `/v2/mainnet`:
 

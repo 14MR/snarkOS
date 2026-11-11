@@ -275,6 +275,11 @@ pub struct Start {
     #[clap(long, value_delimiter = ',', action = clap::ArgAction::Append, conflicts_with = "history_compat_mode")]
     pub history_programs: Vec<String>,
 
+    /// Record per-key mapping history for every program in the ledger database.
+    /// Includes new deployments. Only records blocks processed after startup.
+    #[clap(long, conflicts_with_all = ["history_programs", "history_compat_mode"])]
+    pub archival: bool,
+
     /// Specify the JWT secret for the REST server (16B, base64-encoded).
     #[clap(long, group = "jwt_flags")]
     pub jwt_secret: Option<String>,
@@ -396,12 +401,12 @@ pub struct Start {
 impl Start {
     /// Parses and deduplicates the programs selected for finalize history recording.
     fn parse_history_programs<N: Network>(&self, node_type: NodeType) -> Result<Vec<ProgramID<N>>> {
-        if self.history_programs.is_empty() {
+        if self.history_programs.is_empty() && !self.archival {
             return Ok(Vec::new());
         }
         ensure!(
             matches!(node_type, NodeType::Client | NodeType::Validator),
-            "`--history-programs` is only supported on a client or validator"
+            "`--history-programs` and `--archival` are only supported on a client or validator"
         );
 
         let mut programs = Vec::new();
@@ -1029,9 +1034,9 @@ impl Start {
 
         // Initialize the node.
         let node = match node_type {
-            NodeType::Validator => Node::new_validator(node_ip, self.bft, rest_ip, self.rest_rps, rest_verification_limits, history_api_url.clone(), self.history_json, history_programs, account, &trusted_peers, &trusted_validators, genesis, cdn, storage_mode, node_data_dir, self.trusted_peers_only, self.auto_db_checkpoints.clone(), dev_txs, self.dev, dev_hotswap_config, self.proposal_spent_limit_multiplier, signal_handler.clone()).await,
+            NodeType::Validator => Node::new_validator(node_ip, self.bft, rest_ip, self.rest_rps, rest_verification_limits, history_api_url.clone(), self.history_json, history_programs, self.archival, account, &trusted_peers, &trusted_validators, genesis, cdn, storage_mode, node_data_dir, self.trusted_peers_only, self.auto_db_checkpoints.clone(), dev_txs, self.dev, dev_hotswap_config, self.proposal_spent_limit_multiplier, signal_handler.clone()).await,
             NodeType::Prover => Node::new_prover(node_ip, account, &trusted_peers, genesis, node_data_dir, self.trusted_peers_only, self.dev, signal_handler.clone()).await,
-            NodeType::Client => Node::new_client(node_ip, rest_ip, self.rest_rps, rest_verification_limits, history_api_url.clone(), self.history_json, history_programs, account, &trusted_peers, genesis, cdn, storage_mode, node_data_dir, self.trusted_peers_only, self.auto_db_checkpoints.clone(), self.dev, signal_handler.clone()).await,
+            NodeType::Client => Node::new_client(node_ip, rest_ip, self.rest_rps, rest_verification_limits, history_api_url.clone(), self.history_json, history_programs, self.archival, account, &trusted_peers, genesis, cdn, storage_mode, node_data_dir, self.trusted_peers_only, self.auto_db_checkpoints.clone(), self.dev, signal_handler.clone()).await,
             NodeType::BootstrapClient => Node::new_bootstrap_client(node_ip, account, *genesis.header(), genesis.hash(), self.dev).await,
         }?;
 
