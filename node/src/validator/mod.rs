@@ -43,6 +43,7 @@ use snarkos_utilities::{DevHotswapConfig, NodeDataDir, SignalHandler};
 use snarkvm::prelude::{
     Ledger,
     Network,
+    ProgramID,
     block::{Block, Header},
     puzzle::Solution,
     store::ConsensusStorage,
@@ -88,6 +89,8 @@ impl<N: Network, C: ConsensusStorage<N>> Validator<N, C> {
         rest_verification_limits: RestVerificationLimits,
         history_api_url: Option<String>,
         history_json: bool,
+        history_programs: Vec<ProgramID<N>>,
+        archival: bool,
         account: Account<N>,
         trusted_peers: &[SocketAddr],
         trusted_validators: &[SocketAddr],
@@ -128,6 +131,8 @@ impl<N: Network, C: ConsensusStorage<N>> Validator<N, C> {
         if history_json {
             ledger.vm().finalize_store().set_record_history_json(true);
         }
+        ledger.vm().finalize_store().set_history_programs(history_programs);
+        ledger.vm().finalize_store().set_archival(archival);
 
         // If snarkVM picked the start round itself (no CLI flag and no persisted file),
         // record it now so subsequent restarts are stable.
@@ -623,6 +628,8 @@ mod tests {
             10,
             RestVerificationLimits::max::<CurrentNetwork, ConsensusMemory<CurrentNetwork>>(),
             None,
+            false,
+            Vec::new(),
             false,
             account,
             &[],
